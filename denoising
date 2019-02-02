@@ -1,0 +1,220 @@
+%matplotlib inline
+import os
+import random
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from tqdm import tqdm_notebook as tqdm
+from keras.models import Model
+from keras.layers import Input, Reshape
+from keras.layers.core import Dense, Activation, Dropout, Flatten
+from keras.layers.normalization import BatchNormalization
+from keras.layers.convolutional import UpSampling1D, Conv1D
+from keras.layers.advanced_activations import LeakyReLU
+from keras.optimizers import Adam, SGD
+from keras.callbacks import TensorBoard
+from keras.callbacks import ModelCheckpoint
+from keras.callbacks import Callback
+import xlrd
+import xlsxwriter
+
+
+# Create target Directory if don't exist
+if not os.path.exists("Gdir"):
+    os.mkdir("Gdir")
+    print("Directory " , "Gdir" ,  "Created")
+else:    
+    print("Directory " , "Gdir" ,  " already exists")   
+# Create target Directory if don't exist
+if not os.path.exists("Ddir"):
+    os.mkdir("Ddir")
+    print("Directory " , "Ddir" ,  " Created ")
+else:    
+    print("Directory " , "Ddir" ,  " already exists")
+
+    
+
+
+dataset = np.array(pd.read_excel('gps04.xls',header=None))
+dax = dataset[:,0:3];dax= np.diff(dax,axis = 0)
+day = dataset[:,3:6];day= np.diff(day,axis = 0)
+
+#noise data 
+a1 = (dax[:,0]).reshape(len(dax[:,0]),1)
+a2 = (day[:,0]).reshape(len(day[:,0]),1)
+noise_data = np.concatenate((a1,   a2),axis = 1)
+np.random.shuffle(noise_data)
+
+#movement data
+a1 = (dax[:,1]).reshape(len(dax[:,1]),1)
+a2 = (day[:,1]).reshape(len(day[:,1]),1)
+move_data = np.concatenate((a1,   a2),axis = 1)
+np.random.shuffle(move_data)
+
+
+
+
+
+def sample_data(n_samples):
+    cn = noise_data[np.random.choice(noise_data.shape[0], n_samples, replace=True)]
+    return cn
+
+def sample_move(n_samples=10):
+    cn1 = move_data[np.random.choice(move_data.shape[0], n_samples, replace=False)]
+    return cn1
+       
+def get_generative(G_in, dense_dim=1000, out_dim=2, lr=1e-3):
+    x = Dense(dense_dim)(G_in)
+    x = Activation('tanh')(x)
+    G_out = Dense(out_dim, activation='tanh')(x)
+    G = Model(G_in, G_out)
+    opt = SGD(lr=lr)
+    G.compile(loss='binary_crossentropy', optimizer=opt)
+   
+    return G, G_out
+G_in = Input(shape=[2])
+G, G_out = get_generative(G_in)
+
+
+"""
+def get_discriminative(D_in, lr=1e-3, drate=.25, n_channels=2, conv_sz=2, leak=.2):
+    x = Reshape((-1, 1))(D_in)
+    x = Conv1D(n_channels, conv_sz, activation='relu')(x)
+    x = Dropout(drate)(x)
+    x = Flatten()(x)
+    x = Dense(n_channels)(x)
+    D_out = Dense(2, activation='sigmoid')(x)
+    D = Model(D_in, D_out)
+    dopt = Adam(lr=lr)
+    D.compile(loss='binary_crossentropy', optimizer=dopt)
+    return D, D_out
+D_in = Input(shape=[2])
+D, D_out = get_discriminative(D_in)
+
+"""
+def get_discriminative(D_in, lr=1e-3, drate=.25, n_channels=2, conv_sz=1, leak=.2):
+    x = Reshape((-1, 1))(D_in)
+    x = (Dense(20, input_dim=3072, init="uniform",activation="relu"))(x)
+    x = (Dense(10, activation="relu", kernel_initializer="uniform"))(x)
+    #x = Conv1D(n_channels, conv_sz, activation='relu')(x)
+    x = Dropout(drate)(x)
+    x = Flatten()(x)
+    x = Dense(2)(x)
+    D_out = Dense(2, activation='sigmoid')(x)
+    D = Model(D_in, D_out)
+    dopt = Adam(lr=lr)
+    D.compile(loss='binary_crossentropy', optimizer=dopt)
+    return D, D_out
+D_in = Input(shape=[2])
+D, D_out = get_discriminative(D_in)
+D.summary()
+
+
+
+def set_trainability(model, trainable=False):
+    model.trainable = trainable
+    for layer in model.layers:
+        layer.trainable = trainable
+        
+def make_gan(GAN_in, G, D):
+    set_trainability(D, False)
+    x = G(GAN_in)
+    GAN_out = D(x)
+    GAN = Model(GAN_in, GAN_out)
+    GAN.save_weights
+    GAN.compile(loss='binary_crossentropy', optimizer=G.optimizer)
+    filepath="weights-im-{epoch:02d}-{loss:.2f}.hdf5"
+    checkpoint = ModelCheckpoint(filepath)
+    callbacks_list = [checkpoint]
+    return GAN, GAN_out
+GAN_in = Input([2])
+GAN, GAN_out = make_gan(GAN_in, G, D)
+GAN.summary()
+
+
+def sample_data_and_gen(G, noise_dim=2, n_samples=1000):
+    XT = ((sample_data(n_samples)))
+    XN_noise = np.random.uniform(0, 1, size=[n_samples, 2])
+    XN = G.predict((XN_noise))
+    print(XN.shape)
+    X = np.concatenate((XT, XN))
+    print("This is me me")
+    print(X.shape)
+    print("This is me me")
+    y = np.zeros((2*n_samples, 2))
+    y[:n_samples, 1] = 1
+    y[n_samples:, 0] = 1
+    return X, y
+
+
+##########################################################################
+def pretrain(G, D, noise_dim=2, n_samples=50000, batch_size=10):
+    X, y = sample_data_and_gen(G, n_samples=n_samples, noise_dim=noise_dim)
+    #X = np.transpose(X)
+    #y = np.transpose(y)
+    #print(X.shape)
+    #print(y.shape)
+    set_trainability(D, True)
+    D.fit(X, y, epochs=1, batch_size=batch_size)
+pretrain(G, D)
+##########################################################################
+def sample_noise(G, noise_dim=2, batch=100):
+    X = np.random.uniform(0, 1, size=[batch, noise_dim])
+    y = np.zeros((batch, 2))
+    y[:, 1] = 1
+    return X, y
+
+
+def train(GAN, G, D, epochs=5000, n_samples=50000, noise_dim=2, batch_size=100, verbose=False, v_freq=10):
+    d_loss = []
+    g_loss = []
+    e_range = range(epochs)
+    if verbose:
+        e_range = tqdm(e_range)
+    for epoch in e_range:
+        X, y = sample_data_and_gen(G, n_samples=n_samples, noise_dim=noise_dim)
+        print(X.shape)
+        set_trainability(D, True)
+    
+        d_loss.append(D.train_on_batch(X, y))
+        name = 'weights_disc%01d.hdf5' % epoch
+        D.save_weights(name)
+        
+       
+      
+
+        X, y = sample_noise(G, batch=batch_size, noise_dim=noise_dim)
+        
+        print("This is our")
+        print(X.shape)
+        ma = D.predict_on_batch(X)
+        print(ma)
+        set_trainability(D, False)
+        g_loss.append(GAN.train_on_batch(X, y))
+        na = 'weights_gen%02d.h5' % epoch
+        
+        G.save_weights(na)
+        if verbose and (epoch + 1) % v_freq == 0:
+            print("Epoch #{}: Generative Loss: {}, Discriminative Loss: {}".format(epoch + 1, g_loss[-1], d_loss[-1]))
+          
+    return d_loss, g_loss
+
+d_loss, g_loss = train(GAN, G, D, verbose=True)
+
+
+
+
+
+ax = pd.DataFrame(
+    {
+        'Generative Loss': g_loss,
+        'Discriminative Loss': d_loss,
+    }
+).plot(title='Training loss', logy=True)
+ax.set_xlabel("Epochs")
+ax.set_ylabel("Loss")
+
+
+
+
