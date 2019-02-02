@@ -218,3 +218,28 @@ ax.set_ylabel("Loss")
 
 
 
+
+#This is for testing
+from keras.models import load_model
+def get_discriminative(D_in, lr=1e-3, drate=.25, n_channels=2, conv_sz=1, leak=.2):
+    x = Reshape((-1, 1))(D_in)
+    x = (Dense(768, input_dim=3072, init="uniform",activation="relu"))(x)
+    x = (Dense(384, activation="relu", kernel_initializer="uniform"))(x)
+    #x = Conv1D(n_channels, conv_sz, activation='relu')(x)
+    x = Dropout(drate)(x)
+    x = Flatten()(x)
+    x = Dense(2)(x)
+    D_out = Dense(2, activation='sigmoid')(x)
+    D = Model(D_in, D_out)
+    dopt = Adam(lr=lr)
+    D.compile(loss='binary_crossentropy', optimizer=dopt)
+    return D, D_out
+D_in = Input(shape=[2])
+D, D_out = get_discriminative(D_in)
+
+D.load_weights('weights_disc99.hdf5')
+X= sample_move(10)
+ma = D.predict_on_batch(X)
+print(ma)
+
+
